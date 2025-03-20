@@ -22,7 +22,7 @@ status_label.pack(pady=30)
 root.update()
 
 # تعريف نمط البحث عن الروابط باستخدام Regex
-url_pattern = re.compile(r'(https?://\S+|\b[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}\S*)')
+url_pattern = re.compile(r'(https?://)?(www\.)?(t\.me/[a-zA-Z0-9_]+|wa\.me/[0-9]+)')
 
 # قائمة الروابط المستهدفة (نبحث فقط عن هذه الروابط)
 target_domains = ["t.me", "wa.me"]
@@ -36,7 +36,7 @@ with open(output_file, mode="w", newline="", encoding="utf-8") as f:
     writer.writerow(["Username", "Links"])
 
 with sync_playwright() as p:
-    # الحصول على مسار Chromium باستخدام shutil
+    # الحصول على مسار Chromium
     chromium_path = r"chromium\chrome.exe"
 
     if chromium_path:
@@ -62,55 +62,70 @@ with sync_playwright() as p:
         for username in file:
             username = username.strip()
             if username:
-                user_url = f"https://x.com/{username}"
+                user_url = f"{username}"
                 print(f"🔹 الانتقال إلى صفحة: {user_url}")
                 page.goto(user_url)
                 time.sleep(2)
 
                 try:
-                    # استخراج البايو كنص
+                    # استخراج البايو
                     bio_element = page.query_selector('div[data-testid="UserDescription"]')
                     bio = bio_element.inner_text().strip() if bio_element else ""
 
-                    # استخراج الروابط العادية من النص باستخدام Regex
-                    bio_links_text = url_pattern.findall(bio)
+                    # استخراج الروابط من البايو وتصفية `target_domains`
+                    bio_links_text = []
+                    found_bio_links = url_pattern.findall(bio)
+                    for match in found_bio_links:
+                        protocol = "https://" if not match[0] else match[0]
+                        full_url = protocol + match[2]
 
-                    # استخراج الروابط داخل <a href="...">
-                    bio_links_href = [a.get_attribute("href") for a in page.query_selector_all('div[data-testid="UserDescription"] a') if a.get_attribute("href")]
+                        if any(domain in full_url for domain in target_domains):
+                            bio_links_text.append(full_url)
 
-                    # دمج جميع الروابط المكتشفة من البايو
-                    all_bio_links = list(set(bio_links_text + bio_links_href))
-                    # تصفية الروابط بحيث نحتفظ فقط بالروابط التي تحتوي على t.me أو wa.me
-                    all_bio_links = [link for link in all_bio_links if any(domain in link for domain in target_domains)]
+                    # استخراج الرابط من UserUrl باستخدام XPath
+                    url_element = page.query_selector('xpath=//*[@id="react-root"]/div/div/div[2]/main/div/div/div/div/div/div[3]/div/div/div[1]/div[2]/div[4]/div/a/span')
 
-                    # استخراج الرابط من UserUrl
-                    url_element = page.query_selector('div[data-testid="UserUrl"] a')
-                    element_text = url_element.get_attribute("href") if url_element else ""
-                    if not any(domain in element_text for domain in target_domains):
-                        element_text = ""
+                    urls_in_user_url = []
+                    if url_element:
+                        element_text = url_element.inner_text().strip()
+                        print(f"🔗 رابط مستخرج من UserUrl: {element_text}")
 
-                    # البحث داخل أول 10 تغريدات
+                        # التأكد من أن النص يحتوي على رابط صالح في target_domains
+                        if any(domain in element_text for domain in target_domains):
+                            if not element_text.startswith("http"):
+                                element_text = "https://" + element_text  # إضافة https:// إذا لم يكن موجودًا
+                            urls_in_user_url.append(element_text)
+
+                    # البحث داخل أول 10 تغريدات وتصفيتها بناءً على `target_domains`
                     tweet_links = []
                     tweets = page.locator('div[data-testid="tweetText"]').all()[:10]
                     for tweet in tweets:
                         tweet_text = tweet.inner_text().strip()
-                        tweet_urls = [url for url in url_pattern.findall(tweet_text) if any(domain in url for domain in target_domains)]
+                        tweet_urls = []
+                        found_tweet_links = url_pattern.findall(tweet_text)
+
+                        for match in found_tweet_links:
+                            protocol = "https://" if not match[0] else match[0]
+                            full_url = protocol + match[2]
+
+                            if any(domain in full_url for domain in target_domains):
+                                tweet_urls.append(full_url)
+
                         if tweet_urls:
                             tweet_links.append({"text": tweet_text, "urls": tweet_urls})
 
                 except Exception as e:
                     print(f"⚠️ خطأ أثناء تحليل الحساب {username}: {e}")
-                    bio = ""
-                    all_bio_links = []
-                    element_text = ""
+                    bio_links_text = []
+                    urls_in_user_url = []
                     tweet_links = []
 
-                # إذا لم يوجد أي رابط يحتوي على "t.me" أو "wa.me"، نتخطى الحساب
-                if not all_bio_links and not element_text and not tweet_links:
+                # ✅ **إذا لم يوجد أي رابط في `target_domains`، تجاوز الحساب**
+                if not bio_links_text and not urls_in_user_url and not tweet_links:
                     continue
 
                 # دمج جميع الروابط من البايو، UserUrl، والتغريدات في قائمة واحدة
-                links_to_save = all_bio_links + ([element_text] if element_text else [])
+                links_to_save = bio_links_text + urls_in_user_url
                 for tweet in tweet_links:
                     links_to_save.extend(tweet["urls"])
 
@@ -119,12 +134,12 @@ with sync_playwright() as p:
                     writer = csv.writer(f)
                     writer.writerow([username, ", ".join(links_to_save)])
 
-                # طباعة النتائج
+                # ✅ **طباعة فقط الحسابات التي تحتوي على روابط في `target_domains`**
                 print(f"👤 المستخدم: {username}")
-                if all_bio_links:
-                    print(f"🔗 الروابط في البايو: {', '.join(all_bio_links)}")
-                if element_text:
-                    print(f"🌍 الرابط في UserUrl: {element_text}")
+                if bio_links_text:
+                    print(f"🔗 الروابط في البايو: {', '.join(bio_links_text)}")
+                if urls_in_user_url:
+                    print(f"🌍 الرابط في UserUrl: {', '.join(urls_in_user_url)}")
                 if tweet_links:
                     for tweet in tweet_links:
                         print(f"📢 تغريدة: {tweet['text']}")
@@ -133,12 +148,8 @@ with sync_playwright() as p:
 
     browser.close()
 
-# 🔹 **تحديث الرسالة عند انتهاء التنفيذ**
 status_label.config(text="✅ تم التنفيذ بنجاح!")
 root.update()
-
-# إبقاء النافذة مفتوحة لمدة 3 ثوانٍ ثم إغلاقها
 root.after(3000, root.destroy)
 root.mainloop()
-
 sys.exit(0)
