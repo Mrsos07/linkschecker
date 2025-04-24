@@ -1,3 +1,4 @@
+
 import os
 import sys
 import csv
@@ -40,6 +41,7 @@ with sync_playwright() as p:
 
     # تحميل الكوكيز
     with open(cookies_path, "r", encoding="utf-8") as f:
+
         cookies = json.load(f)
         context.add_cookies(cookies)
 
@@ -78,6 +80,7 @@ with sync_playwright() as p:
                 except Exception as e:
                     print(f"\U0001F538 تعذر معالجة تحذير المحتوى الحساس: {e}")
 
+
                 # ✅ التعامل مع الحسابات الموقوفة
                 try:
                     suspended_account_xpath = 'xpath=//*[@id="react-root"]/div/div/div[2]/main/div/div/div/div/div/div/div/div/div[2]/div/div[1]/span'
@@ -91,62 +94,43 @@ with sync_playwright() as p:
                                 writer.writerow([username, "suspended", "suspended"])
                             continue
                 except Exception as e:
-                    print(f"\u274c خطأ أثناء التحقق من تعليق الحساب: {e}")
 
-                # 🔍 BIO
-                match_found = None
-                bio_element = page.query_selector('div[data-testid="UserDescription"]')
-                if bio_element:
-                    bio_text = bio_element.inner_text().strip().lower()
-                    bio_matches = [w for w in target_words if w in bio_text]
-                    if bio_matches:
-                        match_found = ("bio", ", ".join(bio_matches))
-                time.sleep(0.5)
+                    print(f"⚠️ خطأ أثناء تحليل الحساب {username}: {e}")
+                    bio_links_text = []
+                    urls_in_user_url = []
+                    tweet_links = []
 
-                # ✅ user_url
-                if not match_found:
-                    url_element = page.query_selector('xpath=//*[@id="react-root"]/div/div/div[2]/main/div/div/div/div/div/div/div/div/div[2]/div/div[1]/span')
-                    if url_element:
-                        url_text = url_element.inner_text().strip().lower()
-                        url_matches = [w for w in target_words if w in url_text]
-                        if url_matches:
-                            match_found = ("user_url", ", ".join(url_matches))
-                time.sleep(0.5)
+                # ✅ **إذا لم يوجد أي رابط في `target_domains`، تجاوز الحساب**
+                if not bio_links_text and not urls_in_user_url and not tweet_links:
+                    continue
 
-                # ✅ tweets
-                if not match_found:
-                    tweet_elements = page.locator('div[data-testid="tweetText"]').all()[:10]
-                    for tweet in tweet_elements:
-                        tweet_text = tweet.inner_text().strip().lower()
-                        tweet_matches = [w for w in target_words if w in tweet_text]
-                        if tweet_matches:
-                            match_found = ("tweet", ", ".join(tweet_matches))
-                            break
-                time.sleep(0.5)
+                # دمج جميع الروابط من البايو، UserUrl، والتغريدات في قائمة واحدة
+                links_to_save = bio_links_text + urls_in_user_url
+                for tweet in tweet_links:
+                    links_to_save.extend(tweet["urls"])
 
-                # ✍️ كتابة النتائج
-                if match_found:
-                    with open(output_path, mode="a", newline="", encoding="utf-8") as f:
-                        writer = csv.writer(f)
-                        writer.writerow([username, match_found[0], match_found[1]])
-                    print(f"\u2705 تطابق في {match_found[0]} لـ {username} → {match_found[1]}")
+                # حفظ النتائج في ملف CSV
+                with open(output_file, mode="a", newline="", encoding="utf-8") as f:
+                    writer = csv.writer(f)
+                    writer.writerow([username, ", ".join(links_to_save)])
 
-                elif status_label_text == "sensitive":
-                    with open(output_path, mode="a", newline="", encoding="utf-8") as f:
-                        writer = csv.writer(f)
-                        writer.writerow([username, "sensitive", "sensitive"])
-                    print(f"\u26a0\ufe0f الحساب حساس، تم تسجيله كـ sensitive")
-
-                else:
-                    with open(output_path, mode="a", newline="", encoding="utf-8") as f:
-                        writer = csv.writer(f)
-                        writer.writerow([username, "no_match", "no_match"])
-                    print(f"\u274c لا يوجد تطابق في {username}")
-
-            except Exception as e:
-                print(f"\u274c خطأ أثناء فتح الحساب   {username}: {e}")
+                # ✅ **طباعة فقط الحسابات التي تحتوي على روابط في `target_domains`**
+                print(f"👤 المستخدم: {username}")
+                if bio_links_text:
+                    print(f"🔗 الروابط في البايو: {', '.join(bio_links_text)}")
+                if urls_in_user_url:
+                    print(f"🌍 الرابط في UserUrl: {', '.join(urls_in_user_url)}")
+                if tweet_links:
+                    for tweet in tweet_links:
+                        print(f"📢 تغريدة: {tweet['text']}")
+                        print(f"🔗 الروابط في التغريدة: {', '.join(tweet['urls'])}")
+                        print("-" * 50)
 
     browser.close()
-    root.after(3000, root.destroy)
-    root.mainloop()
-    sys.exit(0)
+
+status_label.config(text="✅ تم التنفيذ بنجاح!")
+root.update()
+root.after(3000, root.destroy)
+root.mainloop()
+sys.exit(0)
+
