@@ -144,7 +144,7 @@ with sync_playwright() as p:
                     print(f"\u274c لا يوجد تطابق في {username}")
 
             except Exception as e:
-                print(f"\u274c خطأ أثناء فتح الحساب {username}: {e}")
+                print(f"\u274c خطأ أثناء فتح الحساب   {username}: {e}")
 
     browser.close()
     root.after(3000, root.destroy)
